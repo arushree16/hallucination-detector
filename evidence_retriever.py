@@ -20,6 +20,7 @@ import re
 import requests
 import nltk
 import wikipediaapi
+import spacy
 from sentence_transformers import SentenceTransformer, util
 from typing import List, Tuple
 
@@ -34,6 +35,7 @@ _wiki = wikipediaapi.Wikipedia(
     extract_format=wikipediaapi.ExtractFormat.WIKI,
 )
 _sbert = SentenceTransformer("BAAI/bge-base-en-v1.5")
+_nlp = spacy.load("en_core_web_sm")
 
 
 # ══════════════════════════════════════════════════════════
@@ -190,7 +192,51 @@ def check_geography_contradiction(claim: str, evidence_sentences: List[str]) -> 
 #  PUBLIC API — called by pipeline.py
 # ══════════════════════════════════════════════════════════
 
-def fetch_evidence(claim: str) -> Tuple[List[str], str]:
+def check_high_confidence_evidence(claim: str, evidence_sentences: List[str], scores: List[float]) -> bool:
+    """
+    Check if we have very high-quality evidence that NLI might miss.
+    
+    Returns True if evidence semantically matches claim very strongly.
+    This catches cases where NLI returns "Not Enough Info" despite clear evidence.
+    """
+    if not evidence_sentences or not scores:
+        return False
+    
+    claim_lower = claim.lower()
+    
+    # Check for exact or near-exact matches in top evidence
+    for i, sent in enumerate(evidence_sentences[:3]):  # Check top 3
+        sent_lower = sent.lower()
+        score = scores[i] if i < len(scores) else 0
+        
+        # High similarity score threshold
+        if score < 0.65:
+            continue
+        
+        # Check for key entity matches
+        # Extract key terms from claim (nouns, proper nouns, numbers)
+        claim_doc = _nlp(claim)
+        key_terms = []
+        for token in claim_doc:
+            if token.pos_ in ["PROPN", "NOUN", "NUM"] and len(token.text) > 2:
+                key_terms.append(token.lemma_.lower())
+        
+        # If most key terms appear in evidence with high similarity, it's strong match
+        matches = sum(1 for term in key_terms if term in sent_lower)
+        if len(key_terms) > 0 and matches / len(key_terms) >= 0.6:
+            return True
+        
+        # Exact date/year matches are very strong signals
+        import re
+        claim_years = re.findall(r'\b(19|20)\d{2}\b', claim)
+        sent_years = re.findall(r'\b(19|20)\d{2}\b', sent)
+        if claim_years and sent_years and claim_years[0] == sent_years[0] and score > 0.6:
+            return True
+    
+    return False
+
+
+def fetch_evidence(claim: str) -> Tuple[List[str], str, List[float]]:
     """
     Search Wikipedia for evidence sentences relevant to the claim.
     
@@ -203,15 +249,16 @@ def fetch_evidence(claim: str) -> Tuple[List[str], str]:
 
     Returns
     -------
-    (evidence_sentences, "UNCERTAIN")
+    (evidence_sentences, "UNCERTAIN", similarity_scores)
 
     evidence_sentences : top relevant sentences from Wikipedia
+    similarity_scores : SBERT similarity scores for each sentence
     """
     query  = _improve_query(claim)
     titles = _search_wikipedia_titles(query)
 
     if not titles:
-        return [], "UNCERTAIN"
+        return [], "UNCERTAIN", []
 
     # Collect all candidate sentences from top Wikipedia pages
     all_candidates: List[Tuple[str, float]] = []
@@ -234,11 +281,12 @@ def fetch_evidence(claim: str) -> Tuple[List[str], str]:
                 all_candidates.append((sentences[i], float(score)))
 
     if not all_candidates:
-        return [], "UNCERTAIN"
+        return [], "UNCERTAIN", []
 
     # Sort by similarity score, keep top 7 (more evidence for NLI)
     all_candidates.sort(key=lambda x: x[1], reverse=True)
     top_sentences = [s for s, _ in all_candidates[:7]]
+    top_scores = [score for _, score in all_candidates[:7]]
 
     # P2 verdict is always UNCERTAIN - NLI makes all decisions
-    return top_sentences, "UNCERTAIN"
+    return top_sentences, "UNCERTAIN", top_scores

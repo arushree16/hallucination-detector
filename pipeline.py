@@ -20,7 +20,10 @@ import json
 from typing import List, Dict
 
 from claim_extractor      import extract_claims
-from evidence_retriever   import fetch_evidence, judge_fact_p2, check_evidence_for_myth_indicators, check_geography_contradiction
+from evidence_retriever   import (fetch_evidence, judge_fact_p2, 
+                                   check_evidence_for_myth_indicators, 
+                                   check_geography_contradiction,
+                                   check_high_confidence_evidence)
 from hallucination_detector import verify_claim
 
 
@@ -28,9 +31,9 @@ from hallucination_detector import verify_claim
 #  VERDICT RECONCILIATION
 # ══════════════════════════════════════════════════════════
 
-def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List[str]) -> Dict:
+def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List[str], scores: List[float]) -> Dict:
     """
-    SIMPLIFIED: Trust NLI (P3) completely, with myth detection and geography safeguards.
+    SIMPLIFIED: Trust NLI (P3) completely, with multiple safeguards.
     
     P2 is now purely an evidence retriever - it makes no verdicts.
     The DeBERTa NLI model is the sole fact checker.
@@ -38,6 +41,7 @@ def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List
     SAFEGUARDS:
     1. If evidence contains "myth", "debunked", etc. → REFUTED
     2. If claim contradicts geography (e.g., "Amazon in Africa") → REFUTED
+    3. If NLI says "Not Enough Info" but we have high-confidence evidence → SUPPORTED
     """
     # Check for myth indicators in evidence - strong signal claim is false
     if evidence and check_evidence_for_myth_indicators(evidence):
@@ -54,6 +58,16 @@ def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List
             "confidence": 0.80,
             "note": "✗ Evidence contradicts claimed location"
         }
+    
+    # High-confidence evidence override: NLI too conservative on paraphrases
+    if p3_label == "Not Enough Info" and evidence and scores:
+        if check_high_confidence_evidence(claim, evidence, scores):
+            avg_conf = sum(scores[:3]) / min(3, len(scores)) if scores else 0.7
+            return {
+                "final": "SUPPORTED",
+                "confidence": round(avg_conf, 4),
+                "note": "✓ Strong semantic evidence match (NLI override)"
+            }
     
     # Map NLI labels directly to final verdict
     final_map = {
@@ -114,7 +128,7 @@ def run_pipeline(text: str) -> List[Dict]:
 
         # Step 2 — Person 2
         print(f"\n  STEP 2 — Evidence Retrieval  [Person 2 · Wikipedia + SBERT]")
-        evidence, p2_verdict = fetch_evidence(claim)
+        evidence, p2_verdict, scores = fetch_evidence(claim)
 
         if evidence:
             print(f"  ✓ {len(evidence)} evidence sentences retrieved")
@@ -131,7 +145,7 @@ def run_pipeline(text: str) -> List[Dict]:
         print(f"  P3 label: {p3_label}  |  confidence: {p3_conf:.2%}")
 
         # Reconcile
-        rec  = reconcile(claim, p2_verdict, p3_label, p3_conf, evidence)
+        rec  = reconcile(claim, p2_verdict, p3_label, p3_conf, evidence, scores)
         icon = {"SUPPORTED": "✅", "REFUTED": "❌",
                 "NOT ENOUGH INFO": "⚠️ ", "CONFLICT": "🔶"}.get(rec["final"], "❓")
 
