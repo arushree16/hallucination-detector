@@ -50,9 +50,15 @@ def reconcile(p2: str, p3_label: str, p3_conf: float) -> Dict:
                "Not Enough Info": "UNKNOWN"}.get(p3_label, "UNKNOWN")
 
     if p3_norm == "UNKNOWN":
+        # P3 couldn't decide — if P2 is confident, use P2's verdict
+        if p2 in ("TRUE", "FALSE"):
+            label_map = {"TRUE": "SUPPORTED", "FALSE": "REFUTED"}
+            return {"final": label_map[p2],
+                    "confidence": round(p3_conf * 0.75, 4),   # discounted — only one signal
+                    "note": f"NLI inconclusive — using P2 keyword verdict ({p2})"}
         return {"final": "NOT ENOUGH INFO",
                 "confidence": p3_conf,
-                "note": "NLI model found insufficient evidence"}
+                "note": "Both P2 and P3 found insufficient evidence"}
 
     if p2 == "UNCERTAIN":
         return {"final": p3_label.upper(),
