@@ -36,6 +36,9 @@ SCIENTIFIC_KEYWORDS = {
     "coffee", "growth", "health", "brain", "heart", "blood",
     # Common fact verbs
     "stunt", "cause", "prevent", "cure", "heal", "affect",
+    # Geography / Earth
+    "earth", "world", "globe", "flat", "round", "sphere", "spherical",
+    "shape", "solar", "system", "sun", "moon",
 }
 
 
@@ -76,8 +79,8 @@ def extract_claims(text: str) -> List[str]:
         # Real tokens (no punctuation / whitespace)
         tokens = [t for t in sent if not t.is_punct and not t.is_space]
 
-        # 2. Skip very short sentences
-        if len(tokens) < 4:
+        # 2. Skip very short sentences (< 3 words)
+        if len(tokens) < 3:
             continue
 
         # 3. Skip commands (first word is base-form verb: VB tag, but not gerund/VBG)
@@ -89,9 +92,9 @@ def extract_claims(text: str) -> List[str]:
         if any(t.lemma_.lower() in SUBJECTIVE_LEMMAS for t in tokens):
             continue
 
-        # 5. Skip adjective-heavy sentences
+        # 5. Skip adjective-heavy sentences (but allow short claims)
         adj_ratio = sum(1 for t in tokens if t.pos_ == "ADJ") / len(tokens)
-        if adj_ratio > 0.20:
+        if adj_ratio > 0.20 and len(tokens) > 5:  # Only filter if sentence is longer
             continue
 
         # 6. Must contain a Named Entity OR a number OR scientific keyword

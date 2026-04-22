@@ -22,9 +22,10 @@ from typing import List, Dict
 from claim_extractor      import extract_claims
 from evidence_retriever   import (fetch_evidence, judge_fact_p2, 
                                    check_evidence_for_myth_indicators, 
-                                   check_geography_contradiction,
+                                   check_entity_contradiction,
                                    check_high_confidence_evidence)
 from hallucination_detector import verify_claim
+from claim_decomposer     import decompose_claim, aggregate_atomic_results
 
 
 # ══════════════════════════════════════════════════════════
@@ -33,17 +34,26 @@ from hallucination_detector import verify_claim
 
 def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List[str], scores: List[float]) -> Dict:
     """
-    SIMPLIFIED: Trust NLI (P3) completely, with multiple safeguards.
+    FACT VERIFICATION with entity-level contradiction detection.
     
-    P2 is now purely an evidence retriever - it makes no verdicts.
-    The DeBERTa NLI model is the sole fact checker.
-    
-    SAFEGUARDS:
-    1. If evidence contains "myth", "debunked", etc. → REFUTED
-    2. If claim contradicts geography (e.g., "Amazon in Africa") → REFUTED
-    3. If NLI says "Not Enough Info" but we have high-confidence evidence → SUPPORTED
+    Three-tier verdict system:
+    - SUPPORTED: Evidence confirms claim
+    - CONTRADICTED: Evidence directly contradicts claim (entity/number mismatch)
+    - REFUTED: Myth/false claim detected
+    - NOT ENOUGH INFO: Insufficient evidence
     """
-    # Check for myth indicators in evidence - strong signal claim is false
+    # PRIORITY 1: Entity-level contradiction check (NEW)
+    # This catches Germany vs France, Amazon in Africa, etc.
+    if evidence:
+        is_contradiction, explanation = check_entity_contradiction(claim, evidence)
+        if is_contradiction:
+            return {
+                "final": "CONTRADICTED",
+                "confidence": 0.85,
+                "note": f"❌ {explanation}"
+            }
+    
+    # PRIORITY 2: Myth/false claim detection
     if evidence and check_evidence_for_myth_indicators(evidence):
         return {
             "final": "REFUTED",
@@ -51,38 +61,90 @@ def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List
             "note": "✗ Evidence indicates this is a myth/false claim"
         }
     
-    # Check for geography contradictions
-    if evidence and check_geography_contradiction(claim, evidence):
-        return {
-            "final": "REFUTED",
-            "confidence": 0.80,
-            "note": "✗ Evidence contradicts claimed location"
-        }
-    
-    # High-confidence evidence override: NLI too conservative on paraphrases
+    # PRIORITY 3: High-confidence evidence override for NLI failures
     if p3_label == "Not Enough Info" and evidence and scores:
         if check_high_confidence_evidence(claim, evidence, scores):
             avg_conf = sum(scores[:3]) / min(3, len(scores)) if scores else 0.7
             return {
                 "final": "SUPPORTED",
                 "confidence": round(avg_conf, 4),
-                "note": "✓ Strong semantic evidence match (NLI override)"
+                "note": "✓ Strong semantic evidence match"
             }
     
-    # Map NLI labels directly to final verdict
-    final_map = {
-        "Supported": ("SUPPORTED", "✓ NLI confirms claim is supported by evidence"),
-        "Refuted": ("REFUTED", "✗ NLI confirms claim is refuted by evidence"),
-        "Not Enough Info": ("NOT ENOUGH INFO", "⚠ No conclusive evidence found")
-    }
+    # PRIORITY 4: Trust NLI verdict with adjusted confidence
+    # Fix: Confidence shouldn't be 100% unless perfect match
+    if p3_label == "Supported":
+        # Reduce confidence if entities don't align well
+        adjusted_conf = min(p3_conf, 0.92)  # Cap at 92% to avoid false 100%
+        return {
+            "final": "SUPPORTED",
+            "confidence": round(adjusted_conf, 4),
+            "note": "✓ Evidence supports this claim"
+        }
     
-    final_verdict, note = final_map.get(p3_label, ("NOT ENOUGH INFO", "Unknown NLI response"))
+    if p3_label == "Refuted":
+        return {
+            "final": "REFUTED",
+            "confidence": round(p3_conf, 4),
+            "note": "✗ Evidence refutes this claim"
+        }
     
+    # Default: Not enough info
     return {
-        "final": final_verdict,
-        "confidence": p3_conf,
-        "note": note
+        "final": "NOT ENOUGH INFO",
+        "confidence": round(p3_conf, 4) if p3_conf else 0.5,
+        "note": "⚠ No conclusive evidence found"
     }
+
+
+def verify_atomic_claims(claim: str, evidence: List[str], scores: List[float]) -> Dict:
+    """
+    Decompose claim into atomic sub-claims and verify each independently.
+    
+    Returns aggregated result with breakdown of correct/incorrect parts.
+    """
+    from claim_decomposer import decompose_claim, AtomicClaim
+    
+    # Decompose into atomic claims
+    atoms = decompose_claim(claim)
+    
+    # If only one atom, verify directly
+    if len(atoms) == 1:
+        p3 = verify_claim(claim, evidence)
+        rec = reconcile(claim, "UNCERTAIN", p3["label"], p3["confidence"], evidence, scores)
+        return {
+            "final_verdict": rec["final"],
+            "confidence": rec["confidence"],
+            "note": rec["note"],
+            "atomic_breakdown": [],
+            "used_atomic": False
+        }
+    
+    # Verify each atom independently
+    atomic_results = []
+    
+    for atom in atoms:
+        # Get evidence for this specific atom
+        atom_evidence, _, atom_scores = fetch_evidence(atom.text)
+        
+        # Verify atom
+        p3 = verify_claim(atom.text, atom_evidence)
+        rec = reconcile(atom.text, "UNCERTAIN", p3["label"], p3["confidence"], atom_evidence, atom_scores)
+        
+        atomic_results.append({
+            "atom": atom.text,
+            "type": atom.claim_type,
+            "verdict": rec["final"],
+            "confidence": rec["confidence"],
+            "note": rec["note"]
+        })
+    
+    # Aggregate results
+    agg = aggregate_atomic_results(claim, atomic_results)
+    agg["used_atomic"] = True
+    agg["atomic_breakdown"] = atomic_results
+    
+    return agg
 
 
 # ══════════════════════════════════════════════════════════
@@ -137,30 +199,43 @@ def run_pipeline(text: str) -> List[Dict]:
         else:
             print(f"  ⚠  No evidence found")
 
-        # Step 3 — Person 3
-        print(f"\n  STEP 3 — NLI Verification  [Person 3 · RoBERTa-NLI]")
-        p3 = verify_claim(claim, evidence)
-        p3_label = p3["label"]
-        p3_conf  = p3["confidence"]
-        print(f"  P3 label: {p3_label}  |  confidence: {p3_conf:.2%}")
+        # Step 3 — Atomic Verification (NEW)
+        print(f"\n  STEP 3 — Atomic Verification  [Decomposing claim]")
+        atomic_result = verify_atomic_claims(claim, evidence, scores)
+        
+        # Show atomic breakdown if decomposition was used
+        if atomic_result.get("used_atomic"):
+            print(f"  Decomposed into {len(atomic_result['atomic_breakdown'])} sub-claims:")
+            for atom in atomic_result["atomic_breakdown"]:
+                atom_icon = {"SUPPORTED": "✓", "CONTRADICTED": "✗", 
+                           "REFUTED": "✗", "NOT ENOUGH INFO": "?"}.get(atom["verdict"], "?")
+                print(f"    {atom_icon} [{atom['type']}] {atom['atom'][:60]}... → {atom['verdict']}")
+            
+            if atomic_result.get("incorrect_percentage", 0) > 0:
+                print(f"\n  ⚠  {atomic_result['incorrect_percentage']}% of facts are incorrect")
+        
+        final_verdict = atomic_result["final_verdict"]
+        final_confidence = atomic_result["confidence"]
+        final_note = atomic_result["note"]
+        
+        icon = {"SUPPORTED": "✅", "REFUTED": "❌", "CONTRADICTED": "❌",
+                "NOT ENOUGH INFO": "⚠️ ", "PARTIALLY CONTRADICTED": "🔶"}.get(final_verdict, "❓")
 
-        # Reconcile
-        rec  = reconcile(claim, p2_verdict, p3_label, p3_conf, evidence, scores)
-        icon = {"SUPPORTED": "✅", "REFUTED": "❌",
-                "NOT ENOUGH INFO": "⚠️ ", "CONFLICT": "🔶"}.get(rec["final"], "❓")
-
-        print(f"\n  {icon}  FINAL: {rec['final']}  ({rec['confidence']:.0%})")
-        print(f"      {rec['note']}")
+        print(f"\n  {icon}  FINAL: {final_verdict}  ({final_confidence:.0%})")
+        print(f"      {final_note}")
 
         all_results.append({
             "claim":          claim,
             "evidence":       evidence,
             "p2_verdict":     p2_verdict,
-            "p3_label":       p3_label,
-            "p3_confidence":  p3_conf,
-            "final_verdict":  rec["final"],
-            "confidence":     rec["confidence"],
-            "note":           rec["note"],
+            "p3_label":       atomic_result.get("atomic_breakdown", [{}])[0].get("verdict", "N/A") if atomic_result.get("atomic_breakdown") else "N/A",
+            "p3_confidence":  final_confidence,
+            "final_verdict":  final_verdict,
+            "confidence":     final_confidence,
+            "note":           final_note,
+            "atomic_breakdown": atomic_result.get("atomic_breakdown", []),
+            "incorrect_parts": atomic_result.get("incorrect_parts", []),
+            "correct_parts": atomic_result.get("correct_parts", []),
         })
 
     # ── SUMMARY  ──────────────────────────────────────────

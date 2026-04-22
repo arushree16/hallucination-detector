@@ -139,53 +139,81 @@ def check_evidence_for_myth_indicators(evidence_sentences: List[str]) -> bool:
     return False
 
 
-def check_geography_contradiction(claim: str, evidence_sentences: List[str]) -> bool:
+def check_entity_contradiction(claim: str, evidence_sentences: List[str]) -> tuple[bool, str]:
     """
-    Check if claim about location contradicts evidence.
+    Check for entity-level contradictions between claim and evidence.
     
-    Returns True if evidence clearly contradicts the claimed location.
+    Returns (True, explanation) if entities mismatch (e.g., Germany vs France),
+    (False, "") if no contradiction found.
     """
     import re
-    claim_lower = claim.lower()
+    from rapidfuzz import fuzz  # For fuzzy string matching
     
-    # Geography mappings: place -> correct region/country
-    geography_map = {
-        "amazon rainforest": ["south america", "brazil", "peru", "colombia"],
-        "amazon river": ["south america", "brazil", "peru"],
-        "mount everest": ["nepal", "tibet", "himalaya"],
+    claim_doc = _nlp(claim)
+    claim_entities = {ent.text.lower(): ent.label_ for ent in claim_doc.ents}
+    
+    if not claim_entities:
+        return False, ""
+    
+    evidence_text = " ".join(evidence_sentences)
+    evidence_doc = _nlp(evidence_text)
+    evidence_entities = {ent.text.lower(): ent.label_ for ent in evidence_doc.ents}
+    
+    # Check each entity in claim against evidence
+    for claim_ent, claim_label in claim_entities.items():
+        # Skip small entities
+        if len(claim_ent) < 3:
+            continue
+            
+        # Check if similar entity exists in evidence with different value
+        for evid_ent, evid_label in evidence_entities.items():
+            # Same entity type but different value = contradiction
+            if (claim_label == evid_label and 
+                claim_label in ["GPE", "PERSON", "ORG", "NORP"] and
+                fuzz.ratio(claim_ent, evid_ent) < 70 and  # Not the same entity
+                len(evid_ent) > 3):
+                
+                # Check if they appear in similar context (same sentence)
+                for sent in evidence_sentences:
+                    sent_lower = sent.lower()
+                    if claim_ent in sent_lower or evid_ent in sent_lower:
+                        return True, f"Entity mismatch: claim says '{claim_ent}', evidence says '{evid_ent}'"
+    
+    # Check for country/location contradictions specifically
+    claim_lower = claim.lower()
+    for place, correct_regions in {
+        "amazon": ["south america", "brazil", "peru"],
         "nile": ["africa", "egypt", "sudan"],
         "sahara": ["africa"],
-        "great wall": ["china"],
-    }
-    
-    for place, correct_regions in geography_map.items():
+        "everest": ["nepal", "tibet"],
+    }.items():
         if place in claim_lower:
-            # Check evidence for correct region
-            evidence_text = " ".join(evidence_sentences).lower()
+            evidence_lower = evidence_text.lower()
+            has_correct = any(region in evidence_lower for region in correct_regions)
             
-            # Check if correct region is mentioned
-            has_correct = any(region in evidence_text for region in correct_regions)
+            # Common wrong locations
+            wrong_map = {
+                "amazon": ["africa"],
+                "nile": ["south america", "asia"],
+                "sahara": ["asia", "south america"],
+                "everest": ["india", "china"],  # China is partial, India is wrong
+            }
             
-            # Check if wrong continent is explicitly claimed
-            wrong_continents = []
-            if place in ["amazon rainforest", "amazon river"]:
-                wrong_continents = ["africa"]  # Common confusion
-            elif place in ["nile", "sahara"]:
-                wrong_continents = ["south america", "asia"]
-            elif place == "mount everest":
-                # Everest is in Nepal/Tibet - saying just "China" or "India" is wrong
-                if "in china" in claim_lower and "nepal" in evidence_text:
-                    # Evidence mentions Nepal prominently, claim says only China
-                    if "china" not in evidence_text or evidence_text.count("nepal") > evidence_text.count("china"):
-                        return True
-            
-            # If evidence mentions correct region AND claim mentions wrong one
-            has_wrong = any(wrong in claim_lower for wrong in wrong_continents)
+            has_wrong = any(wrong in claim_lower for wrong in wrong_map.get(place, []))
             
             if has_correct and has_wrong:
-                return True
+                return True, f"Geography contradiction: {place} is not in the claimed location"
     
-    return False
+    return False, ""
+
+
+def check_geography_contradiction(claim: str, evidence_sentences: List[str]) -> bool:
+    """
+    DEPRECATED: Use check_entity_contradiction instead.
+    Kept for backward compatibility.
+    """
+    result, _ = check_entity_contradiction(claim, evidence_sentences)
+    return result
 
 
 # ══════════════════════════════════════════════════════════

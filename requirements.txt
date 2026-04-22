@@ -1,0 +1,7 @@
+spacy
+transformers
+torch
+wikipedia-api
+sentence-transformers
+nltk
+requests
