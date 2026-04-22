@@ -110,16 +110,37 @@ def judge_fact_p2(fact: str, evidence: str) -> str:
         return "TRUE" if abs(f_num - e_num) <= 0.1 else "FALSE"
 
     # Largest country
-    if "largest" in f_lower:
+    if "largest" in f_lower and "country" in f_lower:
         if any(w in e_lower for w in ["largest", "1st", "first", "#1"]):
             return "TRUE"
         if any(w in e_lower for w in ["second", "third", "2nd", "3rd", "smaller"]):
             return "FALSE"
+    
+    # Capital city detection
+    if "capital of" in f_lower:
+        # Extract the pattern "capital of X is Y" or "Y is the capital of X"
+        import re
+        # Try to find "capital of COUNTRY is CITY" pattern in fact
+        cap_match = re.search(r"capital of (\w+) is (\w+)", f_lower)
+        if cap_match:
+            country_in_fact = cap_match.group(1)
+            city_in_fact = cap_match.group(2)
+            # Check if evidence mentions this city with a different country
+            if city_in_fact in e_lower:
+                # Look for pattern like "capital of (different country)" with same city
+                other_cap = re.search(r"capital of (\w+) is " + re.escape(city_in_fact), e_lower)
+                if other_cap:
+                    country_in_evidence = other_cap.group(1)
+                    if country_in_evidence != country_in_fact:
+                        return "FALSE"
+                # If evidence mentions the correct country with this capital
+                if f"capital of {country_in_fact}" in e_lower and city_in_fact in e_lower:
+                    return "TRUE"
 
     # Earth revolves / orbits
     if "earth revolves around the sun" in f_lower or "earth orbits the sun" in f_lower:
-        orbit_words = ["orbits the sun", "revolves around sun",
-                       "heliocentric", "heliocentrism"]
+        orbit_words = ["orbits the sun", "revolves around sun", "revolves around the sun",
+                       "heliocentric", "heliocentrism", "orbital motion"]
         return "TRUE" if any(w in e_lower for w in orbit_words) else "FALSE"
 
     # Sex chromosomes
