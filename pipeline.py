@@ -30,55 +30,25 @@ from hallucination_detector import verify_claim
 
 def reconcile(p2: str, p3_label: str, p3_conf: float) -> Dict:
     """
-    Combine Person 2's keyword verdict with Person 3's NLI verdict.
-
-    Key rules:
-    - If P3 is highly confident (≥75%) about Refuted, trust it over P2 TRUE
-      (P2's old default tiebreaker was broken — nearly everything got TRUE)
-    - If P3 is confident Supported and P2 agrees → SUPPORTED
-    - If P3 is Not Enough Info, fall back to P2 only if P2 explicitly matched
-      a keyword rule (not just the default tiebreaker)
-    - P2 UNCERTAIN always defers to P3
+    SIMPLIFIED: Trust NLI (P3) completely.
+    
+    P2 is now purely an evidence retriever - it makes no verdicts.
+    The DeBERTa NLI model is the sole fact checker.
     """
-    p3_norm = {"Supported": "TRUE", "Refuted": "FALSE",
-               "Not Enough Info": "UNKNOWN"}.get(p3_label, "UNKNOWN")
-
-    # High-confidence P3 Refuted overrides P2 TRUE (P2 default was unreliable)
-    if p3_label == "Refuted" and p3_conf >= 0.75:
-        boost = 0.05 if p2 == "FALSE" else 0.0
-        return {"final": "REFUTED",
-                "confidence": min(1.0, p3_conf + boost),
-                "note": f"NLI highly confident: Refuted ({p3_conf:.0%})"
-                        + (" — P2 agrees" if p2 == "FALSE" else "")}
-
-    if p3_norm == "UNKNOWN":
-        if p2 == "FALSE":
-            return {"final": "REFUTED",
-                    "confidence": round(p3_conf * 0.75, 4),
-                    "note": "NLI inconclusive — P2 keyword says FALSE"}
-        if p2 == "TRUE":
-            return {"final": "SUPPORTED",
-                    "confidence": round(p3_conf * 0.70, 4),
-                    "note": "NLI inconclusive — P2 says TRUE (discounted)"}
-        return {"final": "NOT ENOUGH INFO",
-                "confidence": p3_conf,
-                "note": "Both P2 and P3 found insufficient evidence"}
-
-    if p2 == "UNCERTAIN":
-        return {"final": p3_label.upper(),
-                "confidence": p3_conf,
-                "note": "P2 uncertain — deferring to NLI (P3)"}
-
-    if p2 == p3_norm:
-        return {"final": p3_label.upper(),
-                "confidence": min(1.0, p3_conf + 0.05),
-                "note": "✓ Both P2 (keyword) and P3 (NLI) agree"}
-
-    # Genuine conflict
-    return {"final": "CONFLICT",
-            "confidence": max(0.0, p3_conf - 0.10),
-            "note": (f"P2 says {p2}, P3 says {p3_label} "
-                     f"({p3_conf:.0%}) — manual review advised")}
+    # Map NLI labels directly to final verdict
+    final_map = {
+        "Supported": ("SUPPORTED", "✓ NLI confirms claim is supported by evidence"),
+        "Refuted": ("REFUTED", "✗ NLI confirms claim is refuted by evidence"),
+        "Not Enough Info": ("NOT ENOUGH INFO", "⚠ No conclusive evidence found")
+    }
+    
+    final_verdict, note = final_map.get(p3_label, ("NOT ENOUGH INFO", "Unknown NLI response"))
+    
+    return {
+        "final": final_verdict,
+        "confidence": p3_conf,
+        "note": note
+    }
 
 
 # ══════════════════════════════════════════════════════════
@@ -127,11 +97,11 @@ def run_pipeline(text: str) -> List[Dict]:
         evidence, p2_verdict = fetch_evidence(claim)
 
         if evidence:
-            print(f"  ✓ {len(evidence)} evidence sentence(s) | P2 verdict: {p2_verdict}")
+            print(f"  ✓ {len(evidence)} evidence sentences retrieved")
             for e in evidence:
                 print(f"    • {e[:95]}{'…' if len(e) > 95 else ''}")
         else:
-            print(f"  ⚠  No evidence found | P2 verdict: {p2_verdict}")
+            print(f"  ⚠  No evidence found")
 
         # Step 3 — Person 3
         print(f"\n  STEP 3 — NLI Verification  [Person 3 · RoBERTa-NLI]")
@@ -168,8 +138,7 @@ def run_pipeline(text: str) -> List[Dict]:
     for r in all_results:
         icon = icons.get(r["final_verdict"], "❓")
         print(f"  {icon}  {r['final_verdict']:<18} "
-              f"({r['confidence']:.0%})  "
-              f"P2={r['p2_verdict']:<10} P3={r['p3_label']}")
+              f"({r['confidence']:.0%})  NLI: {r['p3_label']}")
         print(f"       → {r['claim'][:70]}")
 
     return all_results
