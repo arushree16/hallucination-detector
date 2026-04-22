@@ -78,7 +78,9 @@ def _nli_score(premise: str, hypothesis: str) -> Dict[str, float]:
     # Lazy-load cross-encoder weights (separate cache)
     global _ce_model, _ce_tokenizer
     if "_ce_model" not in globals():
-        model_name = "cross-encoder/nli-roberta-base"
+        # cross-encoder/nli-deberta-v3-base: significantly stronger than roberta-base
+        # on paraphrased facts, date expressions, and indirect entailment
+        model_name = "cross-encoder/nli-deberta-v3-base"
         _ce_tokenizer = AutoTokenizer.from_pretrained(model_name)
         _ce_model = AutoModelForSequenceClassification.from_pretrained(model_name)
         _ce_model.eval()
@@ -111,27 +113,46 @@ def _aggregate(scores: List[Dict[str, float]]) -> Dict[str, object]:
 
     Strategy
     --------
-    1. Each sentence votes for its highest-probability label.
-    2. Weighted vote: each vote is weighted by its probability, not just 1.
-       This prevents 5 weak neutral votes (0.34 each) drowning out
-       2 strong support votes (0.85 each).
-    3. Decision: highest weighted-vote total wins.
-    4. Confidence = mean of winning label's probabilities across ALL sentences.
+    1.  For each evidence sentence we have three probabilities:
+            support_i, neutral_i, refute_i  (sum to 1)
+
+    2.  Each sentence *votes* for its highest-probability label.
+
+    3.  Count votes:
+            support_votes, refute_votes, neutral_votes
+
+    4.  Decision rules (majority):
+            • If support_votes  > refute_votes  AND support_votes > neutral_votes
+                → Supported
+            • If refute_votes   > support_votes AND refute_votes  > neutral_votes
+                → Refuted
+            • Otherwise
+                → Not Enough Info
+
+    5.  Confidence = mean of the winning label's probabilities across ALL sentences
+        (not just the winning sentences) – this gives a smoother, more calibrated
+        score that reflects overall evidence strength.
+
+    Rationale
+    ---------
+    Using mean probability rather than vote fraction avoids overconfidence when
+    one sentence dominates with a 0.99 score and others are 0.5/0.5/0. The mean
+    naturally down-weights ambiguous evidence.
     """
     n = len(scores)
     if n == 0:
         return {"label": "Not Enough Info", "confidence": 0.0}
 
-    # Weighted votes (probability-weighted, not just count)
-    weighted = {"support": 0.0, "refute": 0.0, "neutral": 0.0}
+    votes = {"support": 0, "refute": 0, "neutral": 0}
     for s in scores:
         winner = max(s, key=s.get)
-        weighted[winner] += s[winner]   # weight by confidence of that vote
+        votes[winner] += 1
 
-    if weighted["support"] > weighted["refute"] and weighted["support"] > weighted["neutral"]:
+    # Determine winning label
+    if votes["support"] > votes["refute"] and votes["support"] > votes["neutral"]:
         final_label = "Supported"
         prob_key    = "support"
-    elif weighted["refute"] > weighted["support"] and weighted["refute"] > weighted["neutral"]:
+    elif votes["refute"] > votes["support"] and votes["refute"] > votes["neutral"]:
         final_label = "Refuted"
         prob_key    = "refute"
     else:

@@ -32,30 +32,34 @@ def reconcile(p2: str, p3_label: str, p3_conf: float) -> Dict:
     """
     Combine Person 2's keyword verdict with Person 3's NLI verdict.
 
-    ┌──────────────┬───────────────────┬──────────────────────────────────┐
-    │ P2           │ P3                │ Final Decision                   │
-    ├──────────────┼───────────────────┼──────────────────────────────────┤
-    │ TRUE         │ Supported         │ ✅ SUPPORTED   — both agree      │
-    │ FALSE        │ Refuted           │ ❌ REFUTED     — both agree      │
-    │ TRUE         │ Refuted           │ 🔶 CONFLICT    — disagree        │
-    │ FALSE        │ Supported         │ 🔶 CONFLICT    — disagree        │
-    │ UNCERTAIN    │ any               │ defer to P3                      │
-    │ any          │ Not Enough Info   │ ⚠  NOT ENOUGH INFO               │
-    └──────────────┴───────────────────┴──────────────────────────────────┘
-
-    When both agree the confidence is boosted (+0.05, capped at 1.0).
-    When they conflict, confidence is penalised (−0.10).
+    Key rules:
+    - If P3 is highly confident (≥75%) about Refuted, trust it over P2 TRUE
+      (P2's old default tiebreaker was broken — nearly everything got TRUE)
+    - If P3 is confident Supported and P2 agrees → SUPPORTED
+    - If P3 is Not Enough Info, fall back to P2 only if P2 explicitly matched
+      a keyword rule (not just the default tiebreaker)
+    - P2 UNCERTAIN always defers to P3
     """
     p3_norm = {"Supported": "TRUE", "Refuted": "FALSE",
                "Not Enough Info": "UNKNOWN"}.get(p3_label, "UNKNOWN")
 
+    # High-confidence P3 Refuted overrides P2 TRUE (P2 default was unreliable)
+    if p3_label == "Refuted" and p3_conf >= 0.75:
+        boost = 0.05 if p2 == "FALSE" else 0.0
+        return {"final": "REFUTED",
+                "confidence": min(1.0, p3_conf + boost),
+                "note": f"NLI highly confident: Refuted ({p3_conf:.0%})"
+                        + (" — P2 agrees" if p2 == "FALSE" else "")}
+
     if p3_norm == "UNKNOWN":
-        # P3 couldn't decide — if P2 is confident, use P2's verdict
-        if p2 in ("TRUE", "FALSE"):
-            label_map = {"TRUE": "SUPPORTED", "FALSE": "REFUTED"}
-            return {"final": label_map[p2],
-                    "confidence": round(p3_conf * 0.75, 4),   # discounted — only one signal
-                    "note": f"NLI inconclusive — using P2 keyword verdict ({p2})"}
+        if p2 == "FALSE":
+            return {"final": "REFUTED",
+                    "confidence": round(p3_conf * 0.75, 4),
+                    "note": "NLI inconclusive — P2 keyword says FALSE"}
+        if p2 == "TRUE":
+            return {"final": "SUPPORTED",
+                    "confidence": round(p3_conf * 0.70, 4),
+                    "note": "NLI inconclusive — P2 says TRUE (discounted)"}
         return {"final": "NOT ENOUGH INFO",
                 "confidence": p3_conf,
                 "note": "Both P2 and P3 found insufficient evidence"}
@@ -70,7 +74,7 @@ def reconcile(p2: str, p3_label: str, p3_conf: float) -> Dict:
                 "confidence": min(1.0, p3_conf + 0.05),
                 "note": "✓ Both P2 (keyword) and P3 (NLI) agree"}
 
-    # Conflict
+    # Genuine conflict
     return {"final": "CONFLICT",
             "confidence": max(0.0, p3_conf - 0.10),
             "note": (f"P2 says {p2}, P3 says {p3_label} "
