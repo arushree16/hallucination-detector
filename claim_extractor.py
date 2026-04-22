@@ -23,6 +23,14 @@ SUBJECTIVE_LEMMAS = {
     "stunning", "gorgeous", "should", "totally",
 }
 
+# Scientific / factual keywords that indicate verifiable claims
+SCIENTIFIC_KEYWORDS = {
+    "dna", "helix", "structure", "molecule", "atom", "cell",
+    "visible", "structure", "composed", "contains", "consists",
+    "mountain", "river", "desert", "ocean", "planet", "galaxy",
+    "species", "organism", "chemical", "element", "compound",
+}
+
 
 def extract_claims(text: str) -> List[str]:
     """
@@ -78,11 +86,12 @@ def extract_claims(text: str) -> List[str]:
         if adj_ratio > 0.20:
             continue
 
-        # 6. Must contain a Named Entity OR a number
+        # 6. Must contain a Named Entity OR a number OR scientific keyword
         has_entity = len(sent.ents) > 0
         has_number = any(t.like_num for t in tokens)
+        has_scientific = any(t.lemma_.lower() in SCIENTIFIC_KEYWORDS for t in tokens)
 
-        if has_entity or has_number:
+        if has_entity or has_number or has_scientific:
             claims.append(sentence_text)
 
     return claims
