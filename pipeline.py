@@ -20,7 +20,7 @@ import json
 from typing import List, Dict
 
 from claim_extractor      import extract_claims
-from evidence_retriever   import fetch_evidence, judge_fact_p2
+from evidence_retriever   import fetch_evidence, judge_fact_p2, check_evidence_for_myth_indicators
 from hallucination_detector import verify_claim
 
 
@@ -28,13 +28,24 @@ from hallucination_detector import verify_claim
 #  VERDICT RECONCILIATION
 # ══════════════════════════════════════════════════════════
 
-def reconcile(p2: str, p3_label: str, p3_conf: float) -> Dict:
+def reconcile(p2: str, p3_label: str, p3_conf: float, evidence: List[str]) -> Dict:
     """
-    SIMPLIFIED: Trust NLI (P3) completely.
+    SIMPLIFIED: Trust NLI (P3) completely, with myth detection safeguard.
     
     P2 is now purely an evidence retriever - it makes no verdicts.
     The DeBERTa NLI model is the sole fact checker.
+    
+    SAFEGUARD: If evidence contains "myth", "debunked", etc., override NLI to REFUTED.
+    This prevents false positives when NLI gets confused by quoted false statements.
     """
+    # Check for myth indicators in evidence - strong signal claim is false
+    if evidence and check_evidence_for_myth_indicators(evidence):
+        return {
+            "final": "REFUTED",
+            "confidence": 0.85,
+            "note": "✗ Evidence indicates this is a myth/false claim"
+        }
+    
     # Map NLI labels directly to final verdict
     final_map = {
         "Supported": ("SUPPORTED", "✓ NLI confirms claim is supported by evidence"),
@@ -111,7 +122,7 @@ def run_pipeline(text: str) -> List[Dict]:
         print(f"  P3 label: {p3_label}  |  confidence: {p3_conf:.2%}")
 
         # Reconcile
-        rec  = reconcile(p2_verdict, p3_label, p3_conf)
+        rec  = reconcile(p2_verdict, p3_label, p3_conf, evidence)
         icon = {"SUPPORTED": "✅", "REFUTED": "❌",
                 "NOT ENOUGH INFO": "⚠️ ", "CONFLICT": "🔶"}.get(rec["final"], "❓")
 

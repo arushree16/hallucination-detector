@@ -114,6 +114,29 @@ def judge_fact_p2(fact: str, evidence: str) -> str:
     return "UNCERTAIN"
 
 
+def check_evidence_for_myth_indicators(evidence_sentences: List[str]) -> bool:
+    """
+    Check if evidence contains strong myth/false claim indicators.
+    
+    If evidence mentions "myth", "debunked", "false claim", etc.,
+    the claim is likely false regardless of NLI output.
+    
+    Returns True if evidence strongly suggests the claim is false.
+    """
+    myth_indicators = [
+        "myth", "debunked", "false claim", "misconception",
+        "common misconception", "widely debunked", "scientifically false",
+        "no scientific evidence", "not true"
+    ]
+    
+    for sent in evidence_sentences:
+        sent_lower = sent.lower()
+        for indicator in myth_indicators:
+            if indicator in sent_lower:
+                return True
+    return False
+
+
 # ══════════════════════════════════════════════════════════
 #  PUBLIC API — called by pipeline.py
 # ══════════════════════════════════════════════════════════
