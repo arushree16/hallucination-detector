@@ -29,6 +29,13 @@ SCIENTIFIC_KEYWORDS = {
     "visible", "structure", "composed", "contains", "consists",
     "mountain", "river", "desert", "ocean", "planet", "galaxy",
     "species", "organism", "chemical", "element", "compound",
+    # Animals and biology
+    "bat", "bats", "bird", "birds", "mammal", "animal", "animals",
+    "fish", "insect", "reptile", "amphibian",
+    # Health and body
+    "coffee", "growth", "health", "brain", "heart", "blood",
+    # Common fact verbs
+    "stunt", "cause", "prevent", "cure", "heal", "affect",
 }
 
 
@@ -73,8 +80,9 @@ def extract_claims(text: str) -> List[str]:
         if len(tokens) < 4:
             continue
 
-        # 3. Skip commands (first word is base-form verb: VB tag)
-        if tokens[0].tag_ == "VB":
+        # 3. Skip commands (first word is base-form verb: VB tag, but not gerund/VBG)
+        # Allow "Drinking coffee..." (VBG) as it's a factual claim, not a command
+        if tokens[0].tag_ == "VB" and tokens[0].tag_ != "VBG":
             continue
 
         # 4. Skip opinions
