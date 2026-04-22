@@ -170,18 +170,38 @@ def run_pipeline(text: str) -> List[Dict]:
 # ══════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    # Note: Person 1's extractor needs sentences with entities/numbers.
-    # These claims are fed as a paragraph; P1 will filter as appropriate.
-    test_text = """
-    The population of India is 1.4 billion.
-    India is the largest country in the world.
-    Girls have XY chromosomes.
-    The Earth revolves around the Sun.
-    Mars has life.
-    The Kohinoor diamond is worth 2 rupees.
-    """
-
-    results = run_pipeline(test_text)
+    import sys
+    
+    print("\n" + "═" * 65)
+    print("  HALLUCINATION DETECTOR — Interactive Mode")
+    print("═" * 65)
+    print("\nEnter text to fact-check (press Enter twice to submit):")
+    print("-" * 65)
+    
+    lines = []
+    while True:
+        try:
+            line = input()
+            if line == "" and lines and lines[-1] == "":
+                break
+            lines.append(line)
+        except EOFError:
+            break
+    
+    user_text = "\n".join(lines).strip()
+    
+    if not user_text:
+        print("\n⚠ No text provided. Using demo text instead.\n")
+        user_text = """
+        The population of India is 1.4 billion.
+        India is the largest country in the world.
+        Girls have XY chromosomes.
+        The Earth revolves around the Sun.
+        Mars has life.
+        The Kohinoor diamond is worth 2 rupees.
+        """
+    
+    results = run_pipeline(user_text)
 
     print("\n\n" + "═" * 65)
     print("  RAW JSON OUTPUT")
