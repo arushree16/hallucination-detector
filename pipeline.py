@@ -20,7 +20,7 @@ import json
 from typing import List, Dict
 
 from claim_extractor      import extract_claims
-from evidence_retriever   import fetch_evidence, judge_fact_p2, check_evidence_for_myth_indicators
+from evidence_retriever   import fetch_evidence, judge_fact_p2, check_evidence_for_myth_indicators, check_geography_contradiction
 from hallucination_detector import verify_claim
 
 
@@ -28,15 +28,16 @@ from hallucination_detector import verify_claim
 #  VERDICT RECONCILIATION
 # ══════════════════════════════════════════════════════════
 
-def reconcile(p2: str, p3_label: str, p3_conf: float, evidence: List[str]) -> Dict:
+def reconcile(claim: str, p2: str, p3_label: str, p3_conf: float, evidence: List[str]) -> Dict:
     """
-    SIMPLIFIED: Trust NLI (P3) completely, with myth detection safeguard.
+    SIMPLIFIED: Trust NLI (P3) completely, with myth detection and geography safeguards.
     
     P2 is now purely an evidence retriever - it makes no verdicts.
     The DeBERTa NLI model is the sole fact checker.
     
-    SAFEGUARD: If evidence contains "myth", "debunked", etc., override NLI to REFUTED.
-    This prevents false positives when NLI gets confused by quoted false statements.
+    SAFEGUARDS:
+    1. If evidence contains "myth", "debunked", etc. → REFUTED
+    2. If claim contradicts geography (e.g., "Amazon in Africa") → REFUTED
     """
     # Check for myth indicators in evidence - strong signal claim is false
     if evidence and check_evidence_for_myth_indicators(evidence):
@@ -44,6 +45,14 @@ def reconcile(p2: str, p3_label: str, p3_conf: float, evidence: List[str]) -> Di
             "final": "REFUTED",
             "confidence": 0.85,
             "note": "✗ Evidence indicates this is a myth/false claim"
+        }
+    
+    # Check for geography contradictions
+    if evidence and check_geography_contradiction(claim, evidence):
+        return {
+            "final": "REFUTED",
+            "confidence": 0.80,
+            "note": "✗ Evidence contradicts claimed location"
         }
     
     # Map NLI labels directly to final verdict
@@ -122,7 +131,7 @@ def run_pipeline(text: str) -> List[Dict]:
         print(f"  P3 label: {p3_label}  |  confidence: {p3_conf:.2%}")
 
         # Reconcile
-        rec  = reconcile(p2_verdict, p3_label, p3_conf, evidence)
+        rec  = reconcile(claim, p2_verdict, p3_label, p3_conf, evidence)
         icon = {"SUPPORTED": "✅", "REFUTED": "❌",
                 "NOT ENOUGH INFO": "⚠️ ", "CONFLICT": "🔶"}.get(rec["final"], "❓")
 

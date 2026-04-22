@@ -137,6 +137,55 @@ def check_evidence_for_myth_indicators(evidence_sentences: List[str]) -> bool:
     return False
 
 
+def check_geography_contradiction(claim: str, evidence_sentences: List[str]) -> bool:
+    """
+    Check if claim about location contradicts evidence.
+    
+    Returns True if evidence clearly contradicts the claimed location.
+    """
+    import re
+    claim_lower = claim.lower()
+    
+    # Geography mappings: place -> correct region/country
+    geography_map = {
+        "amazon rainforest": ["south america", "brazil", "peru", "colombia"],
+        "amazon river": ["south america", "brazil", "peru"],
+        "mount everest": ["nepal", "tibet", "himalaya"],
+        "nile": ["africa", "egypt", "sudan"],
+        "sahara": ["africa"],
+        "great wall": ["china"],
+    }
+    
+    for place, correct_regions in geography_map.items():
+        if place in claim_lower:
+            # Check evidence for correct region
+            evidence_text = " ".join(evidence_sentences).lower()
+            
+            # Check if correct region is mentioned
+            has_correct = any(region in evidence_text for region in correct_regions)
+            
+            # Check if wrong continent is explicitly claimed
+            wrong_continents = []
+            if place in ["amazon rainforest", "amazon river"]:
+                wrong_continents = ["africa"]  # Common confusion
+            elif place in ["nile", "sahara"]:
+                wrong_continents = ["south america", "asia"]
+            elif place == "mount everest":
+                # Everest is in Nepal/Tibet - saying just "China" or "India" is wrong
+                if "in china" in claim_lower and "nepal" in evidence_text:
+                    # Evidence mentions Nepal prominently, claim says only China
+                    if "china" not in evidence_text or evidence_text.count("nepal") > evidence_text.count("china"):
+                        return True
+            
+            # If evidence mentions correct region AND claim mentions wrong one
+            has_wrong = any(wrong in claim_lower for wrong in wrong_continents)
+            
+            if has_correct and has_wrong:
+                return True
+    
+    return False
+
+
 # ══════════════════════════════════════════════════════════
 #  PUBLIC API — called by pipeline.py
 # ══════════════════════════════════════════════════════════
