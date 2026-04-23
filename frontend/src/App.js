@@ -14,8 +14,10 @@ const App = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Use relative URL for same-origin requests
-  const API_URL = '';
+  // Backend API URL
+  // LOCAL: '' (same origin)
+  // RENDER DEPLOYMENT: 'https://your-backend.onrender.com'
+  const API_URL = process.env.REACT_APP_API_URL || '';
 
   const checkFacts = async () => {
     if (!text.trim()) return;

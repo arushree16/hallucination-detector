@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from pipeline import run_pipeline
 import sys
+import os
 
 app = Flask(__name__)
 CORS(app)  # Allow frontend to connect
@@ -24,5 +25,7 @@ def health():
     return jsonify({"status": "ok"})
 
 if __name__ == '__main__':
+    # Use PORT from environment (Render sets this)
+    port = int(os.environ.get('PORT', 5000))
     # Disable reloader to prevent crashes during model loading
-    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
